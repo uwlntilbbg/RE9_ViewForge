@@ -1,0 +1,7 @@
+C:\Users\suqua\PROJECT\RE9_ViewForge\obj\Release\net10.0\RE9_ViewForge.csproj.AssemblyReference.cache
+C:\Users\suqua\PROJECT\RE9_ViewForge\obj\Release\net10.0\RE9_ViewForge.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\suqua\PROJECT\RE9_ViewForge\obj\Release\net10.0\RE9_ViewForge.csproj.CoreCompileInputs.cache
+C:\Users\suqua\PROJECT\RE9_ViewForge\bin\Release\net10.0\RE9_ViewForge.dll
+C:\Users\suqua\PROJECT\RE9_ViewForge\obj\Release\net10.0\RE9_ViewForge.dll
+C:\Users\suqua\PROJECT\RE9_ViewForge\obj\Release\net10.0\refint\RE9_ViewForge.dll
+C:\Users\suqua\PROJECT\RE9_ViewForge\obj\Release\net10.0\ref\RE9_ViewForge.dll
