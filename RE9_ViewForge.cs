@@ -10,6 +10,7 @@ using app;
 using via;
 using System.Numerics;
 using System.Runtime.InteropServices;
+using System.Reflection;
 using InteractLimitType = app.InteractManager.InteractLimitType;
 
 
@@ -25,7 +26,7 @@ namespace RE9_ViewForge
 		public const string COMPANY = "Community Mod Build";
 
 		public const string GUID = "RE9_ViewForge";
-		public const string VERSION = "1.0.0";
+		public const string VERSION = "1.1.0";
 
 		public const string GUID_AND_V_VERSION = GUID + " v" + VERSION;
 
@@ -80,9 +81,11 @@ namespace RE9_ViewForge
 		private static ConfigEntry<int> _profileForFPS = _config.Add("Profile for FPS", 2);
 		private static ConfigEntry<int> _profileForADS = _config.Add("Profile for ADS", 3);
 		private static ConfigEntry<bool> _adsProfileHasPriority = _config.Add("ADS profile has priority", true);
+		private static ConfigEntry<bool> _showMiniHud = _config.Add("Show mini HUD", true);
 		private static ConfigEntry<bool> _enableHotkeys = _config.Add("Enable hotkeys", true);
 		private static ConfigEntry<bool> _hotkeysBlockWhenTyping = _config.Add("Block hotkeys when typing", false);
 		private static ConfigEntry<bool> _profileHotkeysForceManual = _config.Add("Profile hotkeys force manual mode", true);
+		private static ConfigEntry<bool> _disableSpecialCamera = _config.Add("Disable special cameras", false);
 		private static ConfigEntry<int> _hotkeyProfile1 = _config.Add("Hotkey profile P1", (int)ImGuiKey.F1);
 		private static ConfigEntry<int> _hotkeyProfile2 = _config.Add("Hotkey profile P2", (int)ImGuiKey.F2);
 		private static ConfigEntry<int> _hotkeyProfile3 = _config.Add("Hotkey profile P3", (int)ImGuiKey.F3);
@@ -151,6 +154,10 @@ namespace RE9_ViewForge
 		private static ConfigEntry<float> _easeStrength = _config.Add("Ease strength", DEFAULT_EASE_STRENGTH);
 		private static ConfigEntry<bool> _enableFOVSmoothing = _config.Add("Enable FOV smoothing", true);
 		private static ConfigEntry<float> _fovSmoothingFactor = _config.Add("FOV smoothing factor", DEFAULT_FOV_SMOOTHING_FACTOR);
+		private static ConfigEntry<bool> _failsafeEnabled = _config.Add("Failsafe: enable low-FPS fallback", false);
+		private static ConfigEntry<float> _failsafeFpsThreshold = _config.Add("Failsafe: FPS threshold", 45f);
+		private static ConfigEntry<float> _failsafeTPSFOV = _config.Add("Failsafe: TPS FOV", 60f);
+		private static ConfigEntry<float> _failsafeFPSFOV = _config.Add("Failsafe: FPS FOV", 70f);
 
 		//Singletons
 		private static InteractManager? _interactManager;
@@ -159,6 +166,8 @@ namespace RE9_ViewForge
 		//Variables
 		private static float? _smoothedFOV;
 		private static int _lastSmoothingFrame = -1;
+		private static bool _failsafeActive;
+		private static float _lastFramerate;
 
 		private static float _lastRawFOV;
 		private static float _lastTargetFOV;
@@ -1313,6 +1322,8 @@ namespace RE9_ViewForge
 				ImGui.Text("Raw FOV: " + _lastRawFOV.ToString("0.00"));
 				ImGui.Text("Target FOV: " + _lastTargetFOV.ToString("0.00"));
 				ImGui.Text("Applied FOV: " + _lastAppliedFOV.ToString("0.00"));
+				ImGui.Text("FPS: " + _lastFramerate.ToString("0"));
+				ImGui.Text("Failsafe: " + (_failsafeActive ? "ON" : "off"));
 			}
 			ImGui.End();
 
@@ -1320,6 +1331,23 @@ namespace RE9_ViewForge
 			{
 				_showDebugOverlay.Set(open);
 			}
+		}
+
+		private static void DrawMiniHud()
+		{
+			if (_showMiniHud.Value == false) return;
+
+			bool open = true;
+			ImGui.SetNextWindowBgAlpha(0.35f);
+			ImGuiWindowFlags flags = ImGuiWindowFlags.NoDecoration | ImGuiWindowFlags.AlwaysAutoResize | ImGuiWindowFlags.NoSavedSettings | ImGuiWindowFlags.NoFocusOnAppearing | ImGuiWindowFlags.NoNav | ImGuiWindowFlags.NoInputs;
+			if (ImGui.Begin("RE9 VF HUD", ref open, flags))
+			{
+				ImGui.Text($"P{_lastResolvedProfile} ({GetProfileName(_lastResolvedProfile)}) | {_lastPlayerMode} | ADS {(_lastIsADS ? "Y" : "N")}");
+				ImGui.Text($"FOV { _lastAppliedFOV:0}  Smooth {(_failsafeActive || _enableFOVSmoothing.Value == false ? "OFF" : "ON")}  FS {(_failsafeActive ? "ON" : "off")}  FPS {(int)_lastFramerate}");
+			}
+			ImGui.End();
+
+			if (!open) _showMiniHud.Set(false);
 		}
 
 		private static void DrawHelpMarker(string description)
@@ -1383,6 +1411,14 @@ namespace RE9_ViewForge
 			int resolvedProfile = GetActiveProfileNumber();
 			string profileSource = "manual";
 			bool shouldApplyCustomFOV = _enabled.Value && _isHoldingVanillaFOV == false;
+			bool allowSmoothing = _enableFOVSmoothing.Value;
+
+			// FPS monitor + failsafe
+			float fps = 0f;
+			try { fps = ImGui.GetIO().Framerate; } catch { }
+			_lastFramerate = fps;
+			_failsafeActive = _failsafeEnabled.Value && fps > 0f && fps < _failsafeFpsThreshold.Value;
+			if (_failsafeActive) allowSmoothing = false;
 
 			PlayerMode currentViewMode = _lastPlayerMode;
 			if (_characterManager != null && _characterManager.PlayerContextFast != null)
@@ -1401,7 +1437,20 @@ namespace RE9_ViewForge
 				if (currentViewMode == PlayerMode.TPS) targetFOV = GetTPSFOV(rawFOV, resolvedProfile);
 				else if (currentViewMode == PlayerMode.FPS) targetFOV = GetFPSFOV(rawFOV, resolvedProfile);
 
-				appliedFOV = ApplyFOVSmoothing(targetFOV);
+				if (_failsafeActive)
+				{
+					targetFOV = currentViewMode == PlayerMode.FPS ? _failsafeFPSFOV.Value : _failsafeTPSFOV.Value;
+				}
+
+				if (allowSmoothing)
+				{
+					appliedFOV = ApplyFOVSmoothing(targetFOV);
+				}
+				else
+				{
+					ResetSmoothingState();
+					appliedFOV = targetFOV;
+				}
 				ptr = (ptr & 0xFFFFFFFF00000000) | (uint)BitConverter.SingleToInt32Bits(appliedFOV);
 			}
 			else
@@ -1426,6 +1475,7 @@ namespace RE9_ViewForge
 		[Callback(typeof(ImGuiDrawUI), CallbackType.Pre)]
 		public static void PreImGuiDrawUI()
 		{
+			DrawMiniHud();
 			DrawDebugOverlay();
 
 			if (ImGui.TreeNode(GUID_AND_V_VERSION))
@@ -1447,12 +1497,20 @@ namespace RE9_ViewForge
 				{
 					_enabled.DrawCheckbox(); _enabled.DrawResetButtonSameLine(ref labelNr); DrawHelpMarker("Master switch for the whole mod.");
 					_showDebugOverlay.DrawCheckbox(); _showDebugOverlay.DrawResetButtonSameLine(ref labelNr); DrawHelpMarker("Shows live debug info overlay: profile/mode/FOV values.");
+					_showMiniHud.DrawCheckbox(); _showMiniHud.DrawResetButtonSameLine(ref labelNr); DrawHelpMarker("Tiny HUD: profile/mode/FPS/failsafe.");
 					_enableFOVSmoothing.DrawCheckbox(); _enableFOVSmoothing.DrawResetButtonSameLine(ref labelNr); DrawHelpMarker("Smooths camera FOV transitions.");
 					if (_enableFOVSmoothing.Value)
 					{
 						_fovSmoothingFactor.DrawDragFloat(0.01f, 0f, 1f); _fovSmoothingFactor.DrawResetButtonSameLine(ref labelNr); DrawHelpMarker("Transition strength: 0 = very slow, 1 = instant.");
 					}
 					_easeStrength.DrawDragFloat(0.01f, 0f, 1f); _easeStrength.DrawResetButtonSameLine(ref labelNr); DrawHelpMarker("Curve blend for ADS interpolation in fixed ADS mode.");
+
+					ImGui.Separator();
+					_failsafeEnabled.DrawCheckbox(); _failsafeEnabled.DrawResetButtonSameLine(ref labelNr); DrawHelpMarker("If FPS ниже порога, сглаживание выкл, FOV -> failsafe.");
+					_failsafeFpsThreshold.DrawDragFloat(1f, 5f, 120f); _failsafeFpsThreshold.DrawResetButtonSameLine(ref labelNr); DrawHelpMarker("Порог FPS для failsafe.");
+					_failsafeTPSFOV.DrawDragFloat(0.5f, MIN_FOV, MAX_FOV); _failsafeTPSFOV.DrawResetButtonSameLine(ref labelNr); DrawHelpMarker("Failsafe FOV для TPS.");
+					_failsafeFPSFOV.DrawDragFloat(0.5f, MIN_FOV, MAX_FOV); _failsafeFPSFOV.DrawResetButtonSameLine(ref labelNr); DrawHelpMarker("Failsafe FOV для FPS.");
+					ImGui.Text($"Runtime: FPS {(int)_lastFramerate}, failsafe {(_failsafeActive ? "ON" : "off")}");
 				}
 
 				if (ImGui.CollapsingHeader("2) Scene Profiles"))
